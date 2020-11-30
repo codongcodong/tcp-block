@@ -14,16 +14,6 @@
 
 #define ETHER_HDR_LEN 14
 
-uint16_t getCsum(const u_char* data, int len){
-    int tmp = 0;
-    for(int i=0;i<len;i+=2){
-        tmp+=*(uint16_t*)(data+i);
-    }
-    uint16_t res = tmp&0xFFFF;
-    res += (tmp>>16);
-    return ~res;
-}
-
 Mac getMyMac(const char* ifname){
     struct ifreq ifr;
     int sockfd, ret;
@@ -79,7 +69,9 @@ uint16_t getTHsum(libnet_ipv4_hdr* ipv4_hdr){
 	*((u_int16_t*)(data+10)) = htons(segmentLen);
 	memcpy(data+12, (u_char*)(tcp_hdr), segmentLen);
 
-	return getCsum(data, dataLen);
+	u_int16_t sum = getCsum(data, dataLen);
+	free(data);
+	return sum;
 }
 
 void blockPacket(const u_char* packet, int pktLen, pcap_t* handle, Mac myMac){
@@ -105,7 +97,7 @@ void blockPacket(const u_char* packet, int pktLen, pcap_t* handle, Mac myMac){
     //set Eth header
     ((PEthHdr)fwdPkt)->dmac_ = orgDmac;
     ((PEthHdr)fwdPkt)->smac_ = myMac;
-    ((PEthHdr)fwdPkt)->type_ = EthHdr::Ip4;
+    ((PEthHdr)fwdPkt)->type_ = htons(EthHdr::Ip4);
 
     //set IP header
     memcpy(fwdPkt+ETHER_HDR_LEN, ipv4_hdr, 20);             //copy org-packet ip header
@@ -115,10 +107,10 @@ void blockPacket(const u_char* packet, int pktLen, pcap_t* handle, Mac myMac){
     
     //calculate ip checksum
 	ipv4_hdr->ip_sum  = 0;
-    ipv4_hdr->ip_sum = htons(getCsum((const u_char*)ipv4_hdr, 20));
+    ipv4_hdr->ip_sum = getCsum((u_char*)ipv4_hdr, 20);
 
     //set TCP header
-    memcpy(ipv4_hdr+20, tcp_hdr, 20);                       //copy org-packet tcp header
+    memcpy(((u_char*)ipv4_hdr)+20, tcp_hdr, 20);                       //copy org-packet tcp header
     tcp_hdr = (libnet_tcp_hdr*)((char*)ipv4_hdr+20);
     tcp_hdr->th_seq = htonl(ntohl(tcp_hdr->th_seq)+payloadLen);
     *((char*)tcp_hdr+12) = 0x50;                            //hlen: 20
@@ -141,7 +133,7 @@ void blockPacket(const u_char* packet, int pktLen, pcap_t* handle, Mac myMac){
     
     //calculate ip checksum
 	ipv4_hdr->ip_sum  = 0;
-    ipv4_hdr->ip_sum = htons(getCsum((const u_char*)ipv4_hdr, 20));
+    ipv4_hdr->ip_sum = getCsum((u_char*)ipv4_hdr, 20);
 
     tcp_hdr = (libnet_tcp_hdr*)((char*)ipv4_hdr+20);
     uint16_t tmpPort = tcp_hdr->th_sport;                   //swap src, dst Port
@@ -154,24 +146,23 @@ void blockPacket(const u_char* packet, int pktLen, pcap_t* handle, Mac myMac){
 
     *((char*)tcp_hdr+13) = 0x11;                            //ACk & FIN
 
-    //calculate TCP checksum
-    tcp_hdr->th_sum = 0;
-	tcp_hdr->th_sum = getTHsum(ipv4_hdr);
-
     //TCP data 
     char msg[11] = "blocked!!!";
     memcpy(bwdPkt+54, msg, 8);
+
+	//calculate TCP checksum
+    tcp_hdr->th_sum = 0;
+	tcp_hdr->th_sum = getTHsum(ipv4_hdr);
 
     int res = pcap_sendpacket(handle, fwdPkt, 54);
     if (res != 0) {
         fprintf(stderr, "pcap_sendpacket return %d error=%s\n", res, pcap_geterr(handle));
     }
-    
+    free(fwdPkt);
+	
     res = pcap_sendpacket(handle, bwdPkt, 64);
     if (res != 0) {
         fprintf(stderr, "pcap_sendpacket return %d error=%s\n", res, pcap_geterr(handle));
     }
-
-    free(fwdPkt);
     free(bwdPkt);
 }
