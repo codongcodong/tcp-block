@@ -148,7 +148,7 @@ void blockPacket(const u_char* packet, int pktLen, pcap_t* handle, Mac myMac){
 
     //TCP data 
     char msg[11] = "blocked!!!";
-    memcpy(bwdPkt+54, msg, 8);
+    memcpy(bwdPkt+54, msg, 10);
 
 	//calculate TCP checksum
     tcp_hdr->th_sum = 0;
